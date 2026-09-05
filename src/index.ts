@@ -1,6 +1,7 @@
 import type { Context, Fiber } from '@deepseek-ai/cordis'
 import z from '@deepseek-ai/schemastery'
 import { Command } from 'commander'
+import { spawn } from 'node:child_process'
 import { parseCmdline } from '@deepseek-ai/dsh-cmdline'
 import * as mcpClient from '@deepseek-ai/dsh-mcp-client'
 import { NotionTokenStore, type NotionTokens } from './notion-token-store.js'
@@ -18,7 +19,7 @@ import {
 import { startLoginServer } from './login-server.js'
 
 export const name = 'notion'
-export const inject = ['cmdlineArgs', 'credentials']
+export const inject = ['cmdlineArgs', 'credentials', 'commands']
 
 export const Config = z.object({
   mcpUrl: z.string().default('https://mcp.notion.com/mcp'),
@@ -26,6 +27,9 @@ export const Config = z.object({
 })
 
 type Cfg = { mcpUrl: string; port: number }
+
+const LOGIN_COMMAND = 'notion-login'
+const LOGOUT_COMMAND = 'notion-logout'
 
 async function unmount(slot: { child?: Fiber }): Promise<void> {
   if (slot.child) {
@@ -84,6 +88,31 @@ async function refreshAndMount(
   }
 }
 
+function openExternalBrowser(url: string): void {
+  try {
+    if (process.platform === 'darwin') {
+      const child = spawn('open', [url], { detached: true, stdio: 'ignore' })
+      child.unref()
+      return
+    }
+    if (process.platform === 'win32') {
+      const child = spawn('cmd', ['/c', 'start', '', url], { detached: true, stdio: 'ignore' })
+      child.unref()
+      return
+    }
+    const child = spawn('xdg-open', [url], { detached: true, stdio: 'ignore' })
+    child.unref()
+  } catch (error) {
+    console.error('[dsh-notion-mcp] failed to open browser automatically, open URL manually:', error)
+  }
+}
+
+async function runLogout(ctx: Context, store: NotionTokenStore, slot: { child?: Fiber }): Promise<void> {
+  await store.clear()
+  await unmount(slot)
+  console.log('[dsh-notion-mcp] logged out — Notion tools removed')
+}
+
 async function runLogin(ctx: Context, store: NotionTokenStore, config: Cfg, slot: { child?: Fiber }): Promise<void> {
   const redirectBase = `http://127.0.0.1:${config.port}/callback`
   const disc = await discoverOAuth(config.mcpUrl)
@@ -98,6 +127,7 @@ async function runLogin(ctx: Context, store: NotionTokenStore, config: Cfg, slot
   })
   // 直接写终端：`dsh notion login` 这个 CLI 子命令下 ctx.logger 只进内存缓冲区，不落终端。
   console.log(`[dsh-notion-mcp] open this URL to authorize Notion:\n${authorizeUrl}`)
+  openExternalBrowser(authorizeUrl)
   const { wait } = await startLoginServer(state, config.port)
   const cb = await wait
   const tokens = await exchangeCode(disc.tokenEndpoint, {
@@ -122,6 +152,32 @@ export function apply(ctx: Context, config: Cfg): void {
   const slot: { child?: Fiber } = {}
   const refreshMutex = { running: false }
   const isNotionCommand = (ctx.cmdlineArgs?.get() ?? [])[0] === 'notion'
+
+  ctx.commands.register({
+    name: LOGIN_COMMAND,
+    description: 'Start Notion OAuth login flow',
+    recordInput: false,
+    handler: ({ signal }) => {
+      if (signal.aborted) {
+        return { kind: 'error', text: 'login cancelled' }
+      }
+      void runLogin(ctx, store, config, slot).catch((e) => console.error(e))
+      return { kind: 'success', text: 'Notion OAuth login started, check your browser.' }
+    },
+  })
+
+  ctx.commands.register({
+    name: LOGOUT_COMMAND,
+    description: 'Logout from Notion and uninstall MCP tools',
+    recordInput: false,
+    handler: ({ signal }) => {
+      if (signal.aborted) {
+        return { kind: 'error', text: 'logout cancelled' }
+      }
+      void runLogout(ctx, store, slot).catch((e) => console.error(e))
+      return { kind: 'success', text: 'Notion logged out, MCP tools removed.' }
+    },
+  })
 
   // 启动时：有 token 直接挂载；过期则静默刷新；无 token 则提示。
   // 仅在 agent 常驻（web/headless 等）时挂载；notion 命令（login/--help）是短命进程，
@@ -152,12 +208,20 @@ export function apply(ctx: Context, config: Cfg): void {
   // `dsh web`）命令行归 app（web/headless）所有。
   if (isNotionCommand) {
     const program = new Command()
-    program
-      .command('notion')
+    const notion = program.command('notion')
+    notion
       .command('login')
       .description('Authorize Notion via the official MCP OAuth flow')
       .action(() => {
         void runLogin(ctx, store, config, slot)
+          .then(() => ctx.appExit?.(0))
+          .catch((e) => { console.error(e); ctx.appExit?.(1) })
+      })
+    notion
+      .command('logout')
+      .description('Logout from Notion and uninstall MCP tools')
+      .action(() => {
+        void runLogout(ctx, store, slot)
           .then(() => ctx.appExit?.(0))
           .catch((e) => { console.error(e); ctx.appExit?.(1) })
       })

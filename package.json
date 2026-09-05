@@ -1,6 +1,6 @@
 {
   "name": "dsh-notion-mcp",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Connect DeepSeek Harness (dsh) to Notion via the official Notion MCP (OAuth + PKCE)",
   "engines": {
     "node": "^22.19.0 || >=24.0.0"
@@ -21,9 +21,11 @@
   ],
   "scripts": {
     "build": "tsdown",
-    "prepare": "tsdown",
     "test": "vitest run",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "stack:up": "node scripts/test-stack.mjs up",
+    "stack:down": "node scripts/test-stack.mjs down",
+    "stack:status": "node scripts/test-stack.mjs status"
   },
   "dsh": {
     "bundle": {
@@ -41,7 +43,28 @@
     "@types/node": "^22.0.0",
     "tsdown": "^0.13.0",
     "typescript": "^5.6.0",
-    "vitest": "^3.0.0"
+    "vitest": "^3.0.0",
+    "@deepseek-ai/cordis": "*",
+    "@deepseek-ai/cordis-plugin-loader": "*",
+    "@deepseek-ai/cosmokit": "*",
+    "@deepseek-ai/dsh-agent": "*",
+    "@deepseek-ai/dsh-attachment": "*",
+    "@deepseek-ai/dsh-brand": "*",
+    "@deepseek-ai/dsh-cmdline": "*",
+    "@deepseek-ai/dsh-code-runtime": "*",
+    "@deepseek-ai/dsh-credentials": "*",
+    "@deepseek-ai/dsh-invariants": "*",
+    "@deepseek-ai/dsh-llm": "*",
+    "@deepseek-ai/dsh-mcp-client": "*",
+    "@deepseek-ai/dsh-scope": "*",
+    "@deepseek-ai/dsh-session": "*",
+    "@deepseek-ai/dsh-subprocess": "*",
+    "@deepseek-ai/dsh-system-prompt": "*",
+    "@deepseek-ai/dsh-timeout": "*",
+    "@deepseek-ai/dsh-tools": "*",
+    "@deepseek-ai/dsh-typert-protocol": "*",
+    "@deepseek-ai/dsh-user-approval": "*",
+    "@deepseek-ai/schemastery": "*"
   },
   "license": "MIT",
   "keywords": [
