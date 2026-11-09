@@ -18,6 +18,11 @@ Once installed, your `dsh` agent can read and write Notion directly. You authori
 - **Terminal `invalid_grant` handling** — an expired or rotated-away refresh token is never retried; the plugin clears it and asks you to re-authorize.
 - **No secrets in the repo** — tokens live in dsh's credential store, not in this repository.
 
+## What's new in 0.2.0
+
+- On DSH versions that support grant records, the plugin migrates existing Notion credentials without asking you to sign in again. When multiple DSH processes share a credential, only one refreshes it.
+- If Web is already running, finish the Notion login in your terminal. The plugin connects automatically without a Web restart.
+
 ## Screenshots
 
 Ask the `dsh` agent to summarize a technical architecture and write it into Notion:
