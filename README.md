@@ -50,11 +50,11 @@ token 落盘 → Notion MCP 挂载为 mcp__notion__*
 dsh plugin --profile web add dsh-notion-mcp
 ```
 
-把 `web` 换成你运行 agent 所用的 profile（`web`、`headless`、`tui` 等）。
+把 `web` 换成你运行 agent 所用的 profile。DSH `v0.2.2-rc.1` 的默认 `headless` profile 关闭了凭据服务，使用本插件前需[恢复凭据服务](https://github.com/deepseek-ai/deepseek-harness/blob/dsh-v0.2.2-rc.1/packages/bundle/headless/README.zh.md#credentials)。
 
 ## 授权
 
-`notion` 命令需要在一个「最小 profile」里运行——像 `web` 这类 UI app 会独占自己的命令行，不会把 `notion` 转发给插件。token 是全局存储的，所以在任意最小 profile 里授权一次，所有安装了本插件的 profile 都能直接使用：
+`notion` 命令需要在一个「最小 profile」里运行，因为 `web` 等 UI app 会自行解析命令行参数。授权一次后，同一 DSH 主目录下安装了本插件且启用了凭据服务的 profile 可以共用 token。
 
 ```sh
 dsh plugin --profile notion add dsh-notion-mcp
@@ -86,8 +86,9 @@ dsh plugin --profile web remove dsh-notion-mcp
 
 ## 环境要求
 
-- [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness)（`dsh`）—— 已验证兼容 `v0.1.0-rc.8`、`v0.1.1-rc.1`、`v0.1.1-rc.2`、`v0.1.2-alpha.1`；在本地 `v0.1.7-rc.2` 源码启动的 Web profile 中，已验证 Notion MCP 工具发现与注册
-- Node.js `^22.19.0` 或 `>=24.0.0`（与 dsh `v0.1.7-rc.2` 一致；Node 23 不在支持范围内）
+- [DSH `v0.2.2-rc.1`](https://github.com/deepseek-ai/deepseek-harness/releases/tag/dsh-v0.2.2-rc.1)（本地源码提交 `fcc0ad4621`）已验证可加载 `dsh-notion-mcp@0.1.0`。使用本地模拟服务验证了 CLI 登录、token 刷新，以及 Web profile 中的 MCP 工具发现、注册和调用。
+- 此前已验证兼容 DSH `v0.1.0-rc.8`、`v0.1.1-rc.1`、`v0.1.1-rc.2` 和 `v0.1.2-alpha.1`，并在 `v0.1.7-rc.2` 的 Web profile 中验证了 Notion MCP 工具发现与注册。
+- DSH `v0.2.2-rc.1` 需要 Node.js `>=24.9.0`。使用较早的 DSH 版本时，插件本身支持 Node.js `^22.19.0` 或 `>=24.0.0`，运行环境须同时满足所用 DSH 版本的要求。
 
 ## 开发
 

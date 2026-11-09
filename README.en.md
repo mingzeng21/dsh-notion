@@ -50,11 +50,11 @@ On startup the plugin loads the stored tokens and mounts the MCP client; as they
 dsh plugin --profile web add dsh-notion-mcp
 ```
 
-Replace `web` with whichever profile you run the agent in (`web`, `headless`, `tui`, …).
+Replace `web` with the profile you use to run the agent. DSH `v0.2.2-rc.1` disables the credential service in the default `headless` profile. [Restore the credential service](https://github.com/deepseek-ai/deepseek-harness/blob/dsh-v0.2.2-rc.1/packages/bundle/headless/README.md#credentials) before using this plugin there.
 
 ## Authorize
 
-The `notion` command runs in a minimal profile — a UI app such as `web` owns its own command line and does not forward `notion` to the plugin. Tokens are stored globally, so authorize once from a minimal profile and every profile that has the plugin installed picks it up:
+Run the `notion` command in a minimal profile because UI apps such as `web` parse their own command-line arguments. Authorize once and profiles under the same DSH home can share the tokens if they have the plugin installed and the credential service enabled.
 
 ```sh
 dsh plugin --profile notion add dsh-notion-mcp
@@ -86,8 +86,9 @@ dsh plugin --profile web remove dsh-notion-mcp
 
 ## Requirements
 
-- [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) (`dsh`) — verified compatible with `v0.1.0-rc.8`, `v0.1.1-rc.1`, `v0.1.1-rc.2`, and `v0.1.2-alpha.1`; Notion MCP tool discovery and registration were verified in a local Web profile launched from `v0.1.7-rc.2` source
-- Node.js `^22.19.0` or `>=24.0.0` (matching dsh `v0.1.7-rc.2`; Node 23 is outside the supported range)
+- [DSH `v0.2.2-rc.1`](https://github.com/deepseek-ai/deepseek-harness/releases/tag/dsh-v0.2.2-rc.1) (local source commit `fcc0ad4621`) loaded `dsh-notion-mcp@0.1.0` successfully. Tests against a local mock verified CLI login, token refresh, and MCP tool discovery, registration, and calls in the Web profile.
+- Earlier checks verified compatibility with DSH `v0.1.0-rc.8`, `v0.1.1-rc.1`, `v0.1.1-rc.2`, and `v0.1.2-alpha.1`, and Notion MCP tool discovery and registration in the `v0.1.7-rc.2` Web profile.
+- DSH `v0.2.2-rc.1` requires Node.js `>=24.9.0`. With earlier DSH versions, the plugin supports Node.js `^22.19.0` or `>=24.0.0`. Use a Node.js version that also meets your DSH version's requirements.
 
 ## Development
 
