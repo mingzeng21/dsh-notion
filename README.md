@@ -42,7 +42,7 @@ dsh notion login
 token 落盘 → Notion MCP 挂载为 mcp__notion__*
 ```
 
-启动时插件会读取已存 token 并挂载 MCP 客户端；临近过期时在后台刷新（串行化，避免并发重放已轮换的 refresh token）。
+启动时插件读取已存 token 并挂载 MCP 客户端。在支持授权记录的 DSH 版本中，插件会自动迁移已有的 `NOTION_OAUTH` 凭据，无需重新授权。临近过期时，插件在 DSH 的凭据事务内读取最新记录、刷新并保存结果，避免多个进程同时使用同一个 refresh token。
 
 ## 安装
 
@@ -61,9 +61,9 @@ dsh plugin --profile notion add dsh-notion-mcp
 dsh --profile notion notion login
 ```
 
-该命令会注册一个动态 OAuth 客户端，在 `127.0.0.1:53007` 起一个临时本地 HTTP 服务，并打印授权 URL。在浏览器里打开并批准后，Notion 会重定向到 `http://127.0.0.1:53007/callback`，插件校验 `state`、用 code（加 PKCE verifier）换取 token、落盘并挂载客户端。
+该命令会注册一个动态 OAuth 客户端，在 `127.0.0.1:53007` 起一个临时本地 HTTP 服务，并打印授权 URL。在浏览器里打开并批准后，Notion 会重定向到 `http://127.0.0.1:53007/callback`。插件校验 `state`，用 code 和 PKCE verifier 换取 token，再保存凭据。
 
-授权完成后，Notion 工具即以 `mcp__notion__*` 形式可用。
+授权完成后，已打开的 Web profile 会读取新凭据并连接 Notion，无需重启。连接成功后，Notion 工具以 `mcp__notion__*` 形式可用。
 
 ## 卸载
 
@@ -82,11 +82,11 @@ dsh plugin --profile web remove dsh-notion-mcp
 
 - token 通过 dsh 的凭据层（`ctx.credentials`）以单条原子记录存储，绝不提交到本仓库；也不嵌入任何 `client_id` 或密钥——客户端在运行时通过动态客户端注册。
 - Notion 每次刷新都会轮换 refresh token；新 token 与 access token 一起原子落盘。
-- 若 Notion 返回 `invalid_grant`（refresh token 过期或被轮换作废），插件会清掉已存 token 并停止重试——用 `dsh notion login` 重新授权即可。
+- 若 Notion 拒绝当前凭据的 refresh token 并返回 `invalid_grant`，插件会清掉失效的 token 并停止重试。运行 `dsh --profile notion notion login` 重新授权。
 
 ## 环境要求
 
-- [DSH `v0.2.2-rc.1`](https://github.com/deepseek-ai/deepseek-harness/releases/tag/dsh-v0.2.2-rc.1)（本地源码提交 `fcc0ad4621`）已验证可加载 `dsh-notion-mcp@0.1.0`。使用本地模拟服务验证了 CLI 登录、token 刷新，以及 Web profile 中的 MCP 工具发现、注册和调用。
+- [DSH `v0.2.2-rc.1`](https://github.com/deepseek-ai/deepseek-harness/releases/tag/dsh-v0.2.2-rc.1)（本地源码提交 `fcc0ad4621`）已验证可加载 `dsh-notion-mcp@0.2.0`。使用本地模拟服务验证了 CLI 登录、凭据迁移、跨进程刷新，以及 Web profile 中的 MCP 工具调用。
 - 此前已验证兼容 DSH `v0.1.0-rc.8`、`v0.1.1-rc.1`、`v0.1.1-rc.2` 和 `v0.1.2-alpha.1`，并在 `v0.1.7-rc.2` 的 Web profile 中验证了 Notion MCP 工具发现与注册。
 - DSH `v0.2.2-rc.1` 需要 Node.js `>=24.9.0`。使用较早的 DSH 版本时，插件本身支持 Node.js `^22.19.0` 或 `>=24.0.0`，运行环境须同时满足所用 DSH 版本的要求。
 

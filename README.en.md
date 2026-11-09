@@ -42,7 +42,7 @@ browser approves → callback on 127.0.0.1:53007
 tokens persisted → Notion MCP mounted as mcp__notion__*
 ```
 
-On startup the plugin loads the stored tokens and mounts the MCP client; as they near expiry it refreshes them in the background (serialized, so a rotated refresh token is never replayed concurrently).
+On startup, the plugin loads the stored tokens and mounts the MCP client. On DSH versions that support grant records, the plugin migrates existing `NOTION_OAUTH` credentials without asking you to sign in again. When a token nears expiry, the plugin reads the latest grant, refreshes it, and saves the result in one DSH credential transaction. This prevents two processes from using the same refresh token concurrently.
 
 ## Install
 
@@ -61,9 +61,9 @@ dsh plugin --profile notion add dsh-notion-mcp
 dsh --profile notion notion login
 ```
 
-The command registers a dynamic OAuth client, starts a temporary local HTTP server on `127.0.0.1:53007`, and prints an authorization URL. Open it in your browser and approve the request; Notion redirects to `http://127.0.0.1:53007/callback`, and the plugin validates the `state`, exchanges the code (plus the PKCE verifier) for tokens, stores them, and mounts the client.
+The command registers a dynamic OAuth client, starts a temporary local HTTP server on `127.0.0.1:53007`, and prints an authorization URL. Open it in your browser and approve the request. Notion redirects to `http://127.0.0.1:53007/callback`. The plugin validates the `state`, exchanges the code and PKCE verifier for tokens, and saves the credentials.
 
-After authorization, Notion tools are available under `mcp__notion__*`.
+After authorization, a running Web profile loads the new credentials and connects to Notion without a restart. Once connected, Notion tools are available under `mcp__notion__*`.
 
 ## Uninstall
 
@@ -82,11 +82,11 @@ dsh plugin --profile web remove dsh-notion-mcp
 
 - Tokens are stored through dsh's credential seam (`ctx.credentials`) as a single atomic entry and are never committed to this repository. No `client_id` or secret is embedded — the client is registered at runtime via dynamic client registration.
 - Notion rotates the refresh token on every refresh; the new token is persisted atomically together with the access token.
-- If Notion returns `invalid_grant` (refresh token expired or rotated away), the plugin clears the stored tokens and stops retrying — re-authorize with `dsh notion login`.
+- If Notion returns `invalid_grant` for the current refresh token, the plugin clears the invalid tokens and stops retrying. Run `dsh --profile notion notion login` to re-authorize.
 
 ## Requirements
 
-- [DSH `v0.2.2-rc.1`](https://github.com/deepseek-ai/deepseek-harness/releases/tag/dsh-v0.2.2-rc.1) (local source commit `fcc0ad4621`) loaded `dsh-notion-mcp@0.1.0` successfully. Tests against a local mock verified CLI login, token refresh, and MCP tool discovery, registration, and calls in the Web profile.
+- [DSH `v0.2.2-rc.1`](https://github.com/deepseek-ai/deepseek-harness/releases/tag/dsh-v0.2.2-rc.1) (local source commit `fcc0ad4621`) loaded `dsh-notion-mcp@0.2.0` successfully. Tests against a local mock verified CLI login, credential migration, token refresh across processes, and MCP tool calls in the Web profile.
 - Earlier checks verified compatibility with DSH `v0.1.0-rc.8`, `v0.1.1-rc.1`, `v0.1.1-rc.2`, and `v0.1.2-alpha.1`, and Notion MCP tool discovery and registration in the `v0.1.7-rc.2` Web profile.
 - DSH `v0.2.2-rc.1` requires Node.js `>=24.9.0`. With earlier DSH versions, the plugin supports Node.js `^22.19.0` or `>=24.0.0`. Use a Node.js version that also meets your DSH version's requirements.
 

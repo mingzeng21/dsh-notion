@@ -28,12 +28,12 @@ async function fetchJson(url: string, init?: RequestInit): Promise<any> {
   return res.json()
 }
 
-export async function discoverOAuth(resourceBaseUrl: string): Promise<OAuthDiscovery> {
+export async function discoverOAuth(resourceBaseUrl: string, signal?: AbortSignal): Promise<OAuthDiscovery> {
   const base = new URL(resourceBaseUrl)
-  const protectedResource = await fetchJson(`${base.origin}/.well-known/oauth-protected-resource`)
+  const protectedResource = await fetchJson(`${base.origin}/.well-known/oauth-protected-resource`, { signal })
   const authServer: string = protectedResource.authorization_servers?.[0]
   if (!authServer) throw new Error('OAuth discovery: no authorization_servers advertised')
-  const meta = await fetchJson(`${authServer}/.well-known/oauth-authorization-server`)
+  const meta = await fetchJson(`${authServer}/.well-known/oauth-authorization-server`, { signal })
   return {
     authorizationEndpoint: meta.authorization_endpoint,
     tokenEndpoint: meta.token_endpoint,
@@ -124,9 +124,11 @@ export async function exchangeCode(
 export async function refreshAccessToken(
   tokenEndpoint: string,
   opts: { clientId: string; refreshToken: string },
+  signal?: AbortSignal,
 ): Promise<TokenResponse> {
   const res = await fetch(tokenEndpoint, {
     method: 'POST',
+    signal,
     headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
     body: new URLSearchParams({
       grant_type: 'refresh_token',

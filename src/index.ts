@@ -3,7 +3,7 @@ import z from '@deepseek-ai/schemastery'
 import { Command } from 'commander'
 import { parseCmdline } from '@deepseek-ai/dsh-cmdline'
 import * as mcpClient from '@deepseek-ai/dsh-mcp-client'
-import { NotionTokenStore, type NotionTokens } from './notion-token-store.js'
+import { NOTION_GRANT_KEY, NOTION_LEGACY_REF, NotionTokenStore, type NotionTokens } from './notion-token-store.js'
 import {
   discoverOAuth,
   registerClient,
@@ -27,64 +27,40 @@ export const Config = z.object({
 
 type Cfg = { mcpUrl: string; port: number }
 
-async function unmount(slot: { child?: Fiber }): Promise<void> {
-  if (slot.child) {
-    await slot.child.dispose()
-    slot.child = undefined
+const REFRESH_LEAD_MS = 5 * 60_000
+const RETRY_MS = 60_000
+const REFRESH_TIMEOUT_MS = 10_000
+
+// The two credential service generations declare different events.
+declare module '@deepseek-ai/cordis' {
+  interface Events {
+    'credentials/record-updated'(key: string): void
+    'credentials/updated'(ref: typeof NOTION_LEGACY_REF): void
   }
 }
 
-async function mountMcp(ctx: Context, accessToken: string, config: Cfg, slot: { child?: Fiber }): Promise<void> {
-  await unmount(slot)
-  slot.child = ctx.plugin(mcpClient, {
-    transport: 'streamable-http',
-    serverName: 'notion',
-    url: config.mcpUrl,
-    headers: { Authorization: `Bearer ${accessToken}` },
-    toolCallTimeoutMs: 60_000,
-    failOnStartupError: false,
-  })
-}
-
-async function refreshAndMount(
-  ctx: Context,
-  store: NotionTokenStore,
-  config: Cfg,
-  slot: { child?: Fiber },
-  refreshMutex: { running: boolean },
-): Promise<void> {
-  if (refreshMutex.running) return
-  refreshMutex.running = true
+async function renewTokens(config: Cfg, tokens: NotionTokens, signal: AbortSignal): Promise<NotionTokens | undefined> {
+  const timeout = AbortSignal.timeout(REFRESH_TIMEOUT_MS)
+  const disc = await discoverOAuth(config.mcpUrl, AbortSignal.any([signal, timeout]))
+  signal.throwIfAborted()
   try {
-    const tokens = await store.load()
-    if (!tokens) return
-    const disc = await discoverOAuth(config.mcpUrl)
-    let next
-    try {
-      next = await refreshAccessToken(disc.tokenEndpoint, { clientId: tokens.clientId, refreshToken: tokens.refreshToken })
-    } catch (e) {
-      if (e instanceof InvalidGrantError) {
-        await store.clear()
-        await unmount(slot)
-        console.error('[dsh-notion-mcp] invalid_grant: run `dsh notion login` to re-authorize')
-        return
-      }
-      throw e
-    }
-    const refreshed: NotionTokens = {
+    // If the plugin is unloaded after sending the exchange, still save a rotated token.
+    const next = await refreshAccessToken(disc.tokenEndpoint, {
+      clientId: tokens.clientId, refreshToken: tokens.refreshToken,
+    }, timeout)
+    return {
       accessToken: next.accessToken,
       refreshToken: next.refreshToken ?? tokens.refreshToken,
       expiresAt: Date.now() + next.expiresIn * 1000,
       clientId: tokens.clientId,
     }
-    await store.save(refreshed) // single atomic write (rotated refresh persisted with access)
-    await mountMcp(ctx, refreshed.accessToken, config, slot)
-  } finally {
-    refreshMutex.running = false
+  } catch (error) {
+    if (error instanceof InvalidGrantError) return undefined
+    throw error
   }
 }
 
-async function runLogin(ctx: Context, store: NotionTokenStore, config: Cfg, slot: { child?: Fiber }): Promise<void> {
+async function runLogin(store: NotionTokenStore, config: Cfg): Promise<void> {
   const redirectBase = `http://127.0.0.1:${config.port}/callback`
   const disc = await discoverOAuth(config.mcpUrl)
   const { clientId } = await registerClient(disc.registrationEndpoint, [redirectBase])
@@ -113,82 +89,108 @@ async function runLogin(ctx: Context, store: NotionTokenStore, config: Cfg, slot
     clientId,
   }
   await store.save(stored)
-  await mountMcp(ctx, stored.accessToken, config, slot)
-  console.log('[dsh-notion-mcp] authorized — Notion tools now available as mcp__notion__*')
+  console.log('[dsh-notion-mcp] authorized — Notion credentials saved')
+}
+
+function connectAgent(ctx: Context, store: NotionTokenStore, config: Cfg): void {
+  const lifetime = new AbortController()
+  const { signal } = lifetime
+  let child: Fiber | undefined
+  let mountedToken: string | undefined
+  let timer: ReturnType<typeof setTimeout> | undefined
+  let pending = Promise.resolve()
+  let queued = false
+  let refreshBefore = 0
+  let reportedMissing = false
+
+  function schedule(delay: number): void {
+    timer = setTimeout(() => reconcile(Date.now() + REFRESH_LEAD_MS), delay)
+  }
+
+  function reconcile(cutoff = 0): void {
+    if (signal.aborted) return
+    refreshBefore = Math.max(refreshBefore, cutoff)
+    if (queued) return
+    queued = true
+    pending = pending.then(async () => {
+      queued = false
+      const cutoff = refreshBefore
+      refreshBefore = 0
+      if (signal.aborted) return
+      clearTimeout(timer)
+
+      try {
+        let tokens = await store.load()
+        if (signal.aborted) return
+        if (tokens && tokens.expiresAt <= cutoff) {
+          tokens = await store.refresh(tokens, current => renewTokens(config, current, signal))
+        }
+        if (signal.aborted) return
+
+        const accessToken = tokens?.accessToken
+        if (accessToken !== mountedToken) {
+          if (child) await child.dispose()
+          child = undefined
+          mountedToken = undefined
+          if (signal.aborted) return
+          if (accessToken) {
+            child = ctx.plugin(mcpClient, {
+              transport: 'streamable-http',
+              serverName: 'notion',
+              url: config.mcpUrl,
+              headers: { Authorization: `Bearer ${accessToken}` },
+              toolCallTimeoutMs: 60_000,
+              failOnStartupError: false,
+            })
+            mountedToken = accessToken
+          }
+        }
+        if (tokens) {
+          reportedMissing = false
+          const delay = Math.max(RETRY_MS, tokens.expiresAt - Date.now() - REFRESH_LEAD_MS)
+          schedule(Math.min(2_147_483_647, delay))
+        } else if (!reportedMissing) {
+          reportedMissing = true
+          console.error('[dsh-notion-mcp] not authorized — run `dsh --profile notion notion login`')
+        }
+      } catch (error) {
+        if (signal.aborted) return
+        console.error('[dsh-notion-mcp] could not update the Notion connection', error)
+        schedule(RETRY_MS)
+      }
+    })
+  }
+
+  ctx.effect(() => () => {
+    lifetime.abort()
+    clearTimeout(timer)
+  })
+  ctx.on('credentials/record-updated', key => {
+    if (key === NOTION_GRANT_KEY) reconcile()
+  })
+  ctx.on('credentials/updated', ref => {
+    if (ref === NOTION_LEGACY_REF) reconcile()
+  })
+  reconcile(Date.now() + RETRY_MS)
 }
 
 export function apply(ctx: Context, config: Cfg): void {
   const store = new NotionTokenStore(ctx.credentials)
-  const slot: { child?: Fiber } = {}
-  const refreshMutex = { running: false }
-  const isNotionCommand = (ctx.cmdlineArgs?.get() ?? [])[0] === 'notion'
+  if ((ctx.cmdlineArgs?.get() ?? [])[0] !== 'notion') {
+    connectAgent(ctx, store, config)
+    return
+  }
 
-  // 启动时：有 token 直接挂载；过期则静默刷新；无 token 则提示。
-  // 仅在 agent 常驻（web/headless 等）时挂载；notion 命令（login/--help）是短命进程，
-  // 会调用 appExit 触发 dispose，异步挂载会踩到 inactive context。
-  if (!isNotionCommand) {
-    void (async () => {
-      const tokens = await store.load()
-      if (!tokens) {
-        console.error('[dsh-notion-mcp] not authorized — run `dsh notion login`')
-        return
-      }
-      if (tokens.expiresAt > Date.now() + 60_000) {
-        await mountMcp(ctx, tokens.accessToken, config, slot)
-        scheduleRefresh(ctx, store, config, slot, refreshMutex, tokens.expiresAt)
-      } else {
-        await refreshAndMount(ctx, store, config, slot, refreshMutex)
-        const fresh = await store.load()
-        if (fresh) scheduleRefresh(ctx, store, config, slot, refreshMutex, fresh.expiresAt)
-      }
-    })().catch((e) => {
-      // 启动时短暂失败（网络 / discovery / 存储）重试，避免插件永远不挂载。
-      console.error(e)
-      scheduleRefresh(ctx, store, config, slot, refreshMutex, Date.now() + 60_000)
+  const exit = ctx.get('appExit')
+  const program = new Command()
+  program
+    .command('notion')
+    .command('login')
+    .description('Authorize Notion via the official MCP OAuth flow')
+    .action(() => {
+      void runLogin(store, config)
+        .then(() => exit?.(0))
+        .catch((error) => { console.error(error); exit?.(1) })
     })
-  }
-
-  // 登录命令：只有当本次调用就是 `dsh ... notion ...` 时才接管命令行解析；否则（如
-  // `dsh web`）命令行归 app（web/headless）所有。
-  if (isNotionCommand) {
-    const program = new Command()
-    program
-      .command('notion')
-      .command('login')
-      .description('Authorize Notion via the official MCP OAuth flow')
-      .action(() => {
-        void runLogin(ctx, store, config, slot)
-          .then(() => ctx.appExit?.(0))
-          .catch((e) => { console.error(e); ctx.appExit?.(1) })
-      })
-    parseCmdline(ctx, program)
-  }
-
-  // 卸载时关闭子 mcp-client。cordis 4.0.1 用 `ctx.effect(() => disposer)` 做清理，
-  // 不是 `ctx.on('dispose')`。
-  ctx.effect(() => () => { void slot.child?.dispose() })
-}
-
-function scheduleRefresh(
-  ctx: Context,
-  store: NotionTokenStore,
-  config: Cfg,
-  slot: { child?: Fiber },
-  refreshMutex: { running: boolean },
-  expiresAt: number,
-): void {
-  const delay = Math.max(60_000, expiresAt - Date.now() - 5 * 60_000) // 到期前 5 分钟
-  // 用 Node 全局 setTimeout（cordis 4.0.1 无 `ctx.setTimeout`）；定时器经 `ctx.effect` 在卸载时清理。
-  const timer = setTimeout(() => {
-    void refreshAndMount(ctx, store, config, slot, refreshMutex)
-      .then(() => store.load())
-      .then((t) => { if (t) scheduleRefresh(ctx, store, config, slot, refreshMutex, t.expiresAt) })
-      .catch((e) => {
-        // 短暂失败（网络 / discovery / 存储）重试，避免刷新循环就此停止。
-        // invalid_grant 由 refreshAndMount 内部清 token 并 resolve，不会走到这里。
-        console.error(e)
-        scheduleRefresh(ctx, store, config, slot, refreshMutex, Date.now() + 60_000)
-      })
-  }, delay)
-  ctx.effect(() => () => clearTimeout(timer))
+  parseCmdline(ctx, program)
 }

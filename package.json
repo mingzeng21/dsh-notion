@@ -1,6 +1,6 @@
 {
   "name": "dsh-notion-mcp",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Connect DeepSeek Harness (dsh) to Notion via the official Notion MCP (OAuth + PKCE)",
   "engines": {
     "node": "^22.19.0 || >=24.0.0"
